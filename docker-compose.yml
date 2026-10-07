@@ -95,8 +95,8 @@ services:
   r-analytics:                  # Shiny app -> http://localhost:3838
     profiles: ["r"]
     build: ./r
-    image: cgls-r
-    container_name: cgls-r
+    image: mapyourway-r
+    container_name: mapyourway-r
     ports:
       - "3838:3838"
     volumes:
@@ -107,7 +107,7 @@ services:
   r-report:                     # one-off ggplot2 report -> data/reports/r/*.png
     profiles: ["r"]
     build: ./r
-    image: cgls-r
+    image: mapyourway-r
     volumes:
       - ./r:/app
       - ./data:/data
@@ -199,7 +199,7 @@ volumes:
 #       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0
 #       --conf spark.sql.streaming.checkpointLocation=/app/data/checkpoints
 #       --conf spark.sql.adaptive.enabled=true
-#       /app/src/cgls/streaming/job.py
+#       /app/src/mapyourway/streaming/job.py
 #     volumes:
 #       - ./data:/app/data
 #       - ./src:/app/src
