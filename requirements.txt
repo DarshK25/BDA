@@ -35,3 +35,6 @@ mypy==1.7.1
 
 # Logging
 loguru==0.7.2
+
+# Graph algorithms for routing (A* and Dijkstra)
+networkx==3.3
