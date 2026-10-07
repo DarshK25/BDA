@@ -1,0 +1,151 @@
+version: '3.8'
+
+services:
+  # Zookeeper - Required for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: cgls-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - cgls-network
+
+  # Kafka - Message broker for streaming data
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: cgls-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      KAFKA_CONFLUENT_METRICS_ENABLE: 'true'
+      KAFKA_CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    networks:
+      - cgls-network
+
+  # Simulator - Generates GPS, sensor, and weather data
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cgls-simulator
+    depends_on:
+      - kafka
+    command: python -m cgls.simulator.producer
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      PYTHONUNBUFFERED: 1
+    networks:
+      - cgls-network
+    restart: unless-stopped
+
+  # Spark Streaming Job - Real-time processing
+  spark-streaming:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cgls-spark-streaming
+    depends_on:
+      - kafka
+      - simulator
+    command: >
+      spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0
+      --conf spark.sql.streaming.checkpointLocation=/app/data/checkpoints
+      --conf spark.sql.adaptive.enabled=true
+      /app/src/cgls/streaming/job.py
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./conf:/app/conf
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      PYTHONUNBUFFERED: 1
+      SPARK_HOME: /opt/spark
+    networks:
+      - cgls-network
+    restart: unless-stopped
+
+  # Dashboard - Live visualization
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cgls-dashboard
+    depends_on:
+      - kafka
+    command: python -m cgls.dashboard.app
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      PYTHONUNBUFFERED: 1
+    networks:
+      - cgls-network
+    restart: unless-stopped
+
+  # R Analytics - Statistical analysis and Shiny dashboard
+  r-analytics:
+    build:
+      context: ./r
+      dockerfile: Dockerfile
+    container_name: cgls-r-analytics
+    ports:
+      - "3838:3838"
+    volumes:
+      - ./data:/app/data
+      - ./r:/app/r
+    environment:
+      DISABLE_AUTH: "true"
+    networks:
+      - cgls-network
+    restart: unless-stopped
+
+  # ML Trainer - Train models periodically
+  ml-trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cgls-ml-trainer
+    depends_on:
+      - spark-streaming
+    command: python -m cgls.ml.train
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+    environment:
+      PYTHONUNBUFFERED: 1
+    networks:
+      - cgls-network
+    restart: "no"
+
+networks:
+  cgls-network:
+    driver: bridge
+
+volumes:
+  kafka-data:
+  zookeeper-data:

@@ -1,0 +1,89 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+PYTHONPATH
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment variables
+.env
+*.env
+
+# Data directories (generated at runtime)
+data/
+!data/.gitkeep
+
+# Models
+*.pkl
+*.joblib
+*.h5
+*.pb
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Docker
+.dockerignore
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# R
+.Rhistory
+.RData
+.Rproj.user
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS
+Thumbs.db
+.DS_Store
