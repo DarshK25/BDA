@@ -56,14 +56,16 @@ services:
         done
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
 
-  # ---------------------------------------------------------------- data sources
+  # ---------------------------------------------------------------- data sources (REAL TRAFFIC DATA)
   simulator:
     <<: *app
     container_name: mapyourway-simulator
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-    command: python -m mapyourway.simulator.producer --vehicles 300
+    command: python -m mapyourway.simulator.real_producer
+    env_file:
+      - .env  # Load TomTom API key from .env
 
   # ---------------------------------------------------------------- stream processing
   spark:

@@ -28,7 +28,7 @@ The system covers Mumbai's major arterial routes:
 
 The system consists of:
 - **Kafka**: Message broker for real-time data streams
-- **Simulator**: Generates GPS, sensor, and weather data
+- **TomTom Traffic API**: Live traffic data source (replacing synthetic simulator)
 - **Spark Streaming**: Processes real-time data and generates predictions
 - **Machine Learning**: Traffic prediction models (RandomForest, GBT)
 - **Dashboard**: Live visualization of traffic conditions
