@@ -2,7 +2,7 @@ name:
 
 x-app: &app
   build: .
-  image: cgls-app
+  image: mapyourway-app
   volumes:
     - ./src:/app/src            # edit code on Windows, no rebuild needed
     - ./tests:/app/tests
@@ -78,7 +78,7 @@ services:
       spark-submit --master local[2] --driver-memory 2g
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3
       --conf spark.driver.extraJavaOptions=-Dlog4j2.configurationFile=file:/app/conf/log4j2.properties
-      /app/src/cgls/streaming/job.py
+      /app/src/mapyourway/streaming/job.py
 
   # ---------------------------------------------------------------- dashboard
   dashboard:

@@ -1,229 +1,133 @@
 """
-Network topology definition for the CGLS system.
-Defines 13 junctions and 19 roads forming the city traffic network.
+Mumbai Road Network - Western & Central Railway Lines Corridor
+MapYourWay Traffic Network covering major junctions from Borivali to Worli.
+
+Nodes are junction areas with real-world approximate coordinates; segments are the road
+links between them. The same table is used by the simulator, the Spark job (as a static
+lookup table), the router and the dashboard, so they can never disagree about the map.
 """
+from __future__ import annotations
 
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
-import json
+import math
 
-
-@dataclass
-class Junction:
-    """Represents an intersection in the traffic network."""
-    id: str
-    name: str
-    lat: float
-    lon: float
-    traffic_light: bool = True
-
-
-@dataclass
-class Road:
-    """Represents a road segment connecting two junctions."""
-    id: str
-    name: str
-    from_junction: str
-    to_junction: str
-    length_km: float
-    lanes: int
-    speed_limit_kmh: float
-    capacity_vehicles: int
-
-
-# ============================================================================
-# JUNCTION DEFINITIONS (13 junctions)
-# ============================================================================
-
-JUNCTIONS: Dict[str, Junction] = {
-    "J1": Junction("J1", "North Plaza", 40.7580, -73.9855, True),
-    "J2": Junction("J2", "Central Square", 40.7489, -73.9680, True),
-    "J3": Junction("J3", "East Gate", 40.7489, -73.9500, True),
-    "J4": Junction("J4", "South Terminal", 40.7300, -73.9680, True),
-    "J5": Junction("J5", "West Hub", 40.7489, -73.9860, True),
-    "J6": Junction("J6", "Market Cross", 40.7420, -73.9680, True),
-    "J7": Junction("J7", "University Corner", 40.7580, -73.9680, True),
-    "J8": Junction("J8", "Harbor Junction", 40.7300, -73.9860, True),
-    "J9": Junction("J9", "Airport Link", 40.7300, -73.9500, True),
-    "J10": Junction("J10", "Industrial Park", 40.7200, -73.9680, True),
-    "J11": Junction("J11", "Shopping District", 40.7380, -73.9770, True),
-    "J12": Junction("J12", "Tech Park", 40.7580, -73.9770, True),
-    "J13": Junction("J13", "Medical Center", 40.7380, -73.9590, True),
+# name -> (lat, lon) - Real Mumbai coordinates
+NODES: dict[str, tuple[float, float]] = {
+    "Borivali": (19.2307, 72.8567),
+    "Malad": (19.1864, 72.8484),
+    "Goregaon": (19.1663, 72.8526),
+    "Andheri": (19.1136, 72.8697),
+    "Powai": (19.1176, 72.9060),
+    "Santacruz": (19.0817, 72.8411),
+    "Bandra": (19.0596, 72.8295),
+    "Kurla": (19.0726, 72.8845),
+    "Ghatkopar": (19.0860, 72.9081),
+    "Mahim": (19.0409, 72.8403),
+    "Sion": (19.0390, 72.8619),
+    "Dadar": (19.0178, 72.8478),
+    "Worli": (19.0096, 72.8176),
 }
 
-
-# ============================================================================
-# ROAD DEFINITIONS (19 roads)
-# ============================================================================
-
-ROADS: Dict[str, Road] = {
-    # North-South arterials
-    "R1": Road("R1", "Broadway North", "J1", "J7", 1.2, 3, 50, 180),
-    "R2": Road("R2", "Broadway South", "J7", "J2", 1.5, 3, 50, 180),
-    "R3": Road("R3", "Main Street", "J2", "J6", 1.0, 4, 60, 240),
-    "R4": Road("R4", "South Avenue", "J6", "J4", 1.8, 3, 50, 180),
+# (segment_id, node_a, node_b, free_flow_kmph, lanes, demand_bias)
+# demand_bias > 1 means the road is a typical bottleneck.
+_EDGES = [
+    # North-South arterials (Western Line)
+    ("S01", "Borivali", "Malad", 60, 3, 0.9),
+    ("S02", "Malad", "Goregaon", 55, 3, 1.0),
+    ("S03", "Goregaon", "Andheri", 55, 3, 1.1),
+    ("S04", "Andheri", "Santacruz", 50, 3, 1.1),
+    ("S05", "Santacruz", "Bandra", 45, 3, 1.2),
+    ("S06", "Bandra", "Mahim", 40, 2, 1.2),
+    ("S07", "Mahim", "Dadar", 40, 2, 1.2),
+    ("S08", "Dadar", "Worli", 45, 3, 1.1),
     
-    # East-West arterials
-    "R5": Road("R5", "Northern Boulevard", "J1", "J12", 1.0, 2, 45, 120),
-    "R6": Road("R6", "Central Drive", "J7", "J2", 1.3, 4, 60, 240),
-    "R7": Road("R7", "Market Road", "J2", "J3", 1.5, 3, 50, 180),
-    "R8": Road("R8", "Harbor Road", "J5", "J8", 2.0, 2, 40, 100),
+    # Eastern connections
+    ("S09", "Andheri", "Powai", 40, 2, 0.9),
+    ("S10", "Powai", "Ghatkopar", 40, 2, 0.9),
+    ("S11", "Ghatkopar", "Kurla", 45, 2, 1.0),
+    ("S12", "Kurla", "Sion", 40, 2, 1.1),
+    ("S13", "Sion", "Dadar", 40, 2, 1.2),
     
-    # Connecting roads
-    "R9": Road("R9", "West Connector", "J5", "J2", 1.4, 3, 50, 180),
-    "R10": Road("R10", "East Connector", "J2", "J3", 1.6, 3, 50, 180),
-    "R11": Road("R11", "Park Avenue", "J12", "J7", 0.8, 2, 45, 120),
-    "R12": Road("R12", "University Drive", "J7", "J13", 1.1, 2, 40, 100),
-    "R13": Road("R13", "Shopping Loop", "J11", "J6", 0.9, 3, 45, 150),
+    # Cross-connections
+    ("S14", "Santacruz", "Kurla", 50, 3, 1.0),
+    ("S15", "Bandra", "Kurla", 50, 3, 1.1),
+    ("S16", "Andheri", "Kurla", 45, 2, 1.0),
+    ("S17", "Mahim", "Sion", 40, 2, 1.0),
+    ("S18", "Goregaon", "Powai", 45, 2, 0.8),
     
-    # Secondary roads
-    "R14": Road("R14", "Industrial Way", "J4", "J10", 1.3, 2, 40, 100),
-    "R15": Road("R15", "Airport Express", "J3", "J9", 2.5, 4, 80, 320),
-    "R16": Road("R16", "Service Road", "J6", "J13", 1.0, 2, 40, 100),
-    "R17": Road("R17", "Tech Boulevard", "J12", "J11", 0.7, 2, 45, 120),
-    "R18": Road("R18", "Medical Avenue", "J13", "J3", 0.8, 2, 45, 120),
-    "R19": Road("R19", "Harbor Loop", "J8", "J4", 1.5, 2, 40, 100),
-}
+    # Bandra-Worli Sea Link
+    ("S19", "Bandra", "Worli", 70, 4, 0.8),  # Fastest route
+]
+
+ROAD_FACTOR = 1.25  # roads are longer than the straight line between two junctions
 
 
-# ============================================================================
-# ADJACENCY GRAPH
-# ============================================================================
-
-def build_adjacency_graph() -> Dict[str, List[Tuple[str, str]]]:
-    """
-    Build adjacency list representation of the road network.
-    Returns: Dict mapping junction_id -> [(neighbor_junction_id, road_id), ...]
-    """
-    graph: Dict[str, List[Tuple[str, str]]] = {j_id: [] for j_id in JUNCTIONS}
-    
-    for road_id, road in ROADS.items():
-        graph[road.from_junction].append((road.to_junction, road_id))
-        # Bidirectional roads (can be made unidirectional if needed)
-        graph[road.to_junction].append((road.from_junction, road_id))
-    
-    return graph
+def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 2 * 6371.0 * math.asin(math.sqrt(h))
 
 
-ADJACENCY_GRAPH = build_adjacency_graph()
+def _build_segments() -> list[dict]:
+    out = []
+    for sid, a, b, ff, lanes, bias in _EDGES:
+        (lat1, lon1), (lat2, lon2) = NODES[a], NODES[b]
+        out.append(
+            {
+                "segment_id": sid,
+                "name": f"{a}-{b}",
+                "node_a": a,
+                "node_b": b,
+                "length_km": round(haversine_km(NODES[a], NODES[b]) * ROAD_FACTOR, 2),
+                "free_flow_kmph": float(ff),
+                "lanes": int(lanes),
+                "demand_bias": float(bias),
+                "lat1": lat1, "lon1": lon1, "lat2": lat2, "lon2": lon2,
+            }
+        )
+    return out
 
 
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
-
-def get_road_by_junctions(from_j: str, to_j: str) -> Optional[Road]:
-    """Find the road connecting two junctions."""
-    for road in ROADS.values():
-        if (road.from_junction == from_j and road.to_junction == to_j) or \
-           (road.to_junction == from_j and road.from_junction == to_j):
-            return road
-    return None
+SEGMENTS: list[dict] = _build_segments()
+SEGMENT_BY_ID: dict[str, dict] = {s["segment_id"]: s for s in SEGMENTS}
 
 
-def get_connected_roads(junction_id: str) -> List[Road]:
-    """Get all roads connected to a specific junction."""
-    connected = []
-    for road in ROADS.values():
-        if road.from_junction == junction_id or road.to_junction == junction_id:
-            connected.append(road)
-    return connected
+def neighbours(segment_id: str) -> list[str]:
+    """Segments that share a junction with this one (used for incident spill-back)."""
+    s = SEGMENT_BY_ID[segment_id]
+    ends = {s["node_a"], s["node_b"]}
+    return [o["segment_id"] for o in SEGMENTS
+            if o["segment_id"] != segment_id and ends & {o["node_a"], o["node_b"]}]
 
 
-def calculate_travel_time(road: Road, current_speed_kmh: float) -> float:
-    """
-    Calculate travel time in minutes for a road segment.
-    
-    Args:
-        road: Road object
-        current_speed_kmh: Current average speed on the road
-    
-    Returns:
-        Travel time in minutes
-    """
-    if current_speed_kmh <= 0:
-        current_speed_kmh = 1.0  # Prevent division by zero
-    
-    time_hours = road.length_km / current_speed_kmh
-    return time_hours * 60  # Convert to minutes
+def segments_at_node(node: str) -> list[str]:
+    return [s["segment_id"] for s in SEGMENTS if node in (s["node_a"], s["node_b"])]
 
 
-def get_network_summary() -> Dict:
-    """Return summary statistics about the network."""
-    total_length = sum(road.length_km for road in ROADS.values())
-    total_capacity = sum(road.capacity_vehicles for road in ROADS.values())
-    avg_speed_limit = sum(road.speed_limit_kmh for road in ROADS.values()) / len(ROADS)
+def get_network_summary() -> dict:
+    """Return summary statistics about the Mumbai network."""
+    total_length = sum(road["length_km"] for road in SEGMENTS)
+    total_capacity = sum(road["capacity_vehicles"] if "capacity_vehicles" in road else road["lanes"] * 50 for road in SEGMENTS)
+    avg_speed_limit = sum(road["free_flow_kmph"] for road in SEGMENTS) / len(SEGMENTS)
     
     return {
-        "num_junctions": len(JUNCTIONS),
-        "num_roads": len(ROADS),
+        "city": "Mumbai",
+        "area": "Western & Central Railway Lines",
+        "num_junctions": len(NODES),
+        "num_roads": len(SEGMENTS),
         "total_length_km": round(total_length, 2),
-        "total_capacity": total_capacity,
         "avg_speed_limit_kmh": round(avg_speed_limit, 2),
-        "roads_with_traffic_lights": sum(1 for j in JUNCTIONS.values() if j.traffic_light),
     }
-
-
-def export_network_geojson(filepath: str) -> None:
-    """Export network topology as GeoJSON for visualization."""
-    features = []
-    
-    # Export junctions as points
-    for junction in JUNCTIONS.values():
-        features.append({
-            "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [junction.lon, junction.lat]
-            },
-            "properties": {
-                "id": junction.id,
-                "name": junction.name,
-                "type": "junction",
-                "traffic_light": junction.traffic_light
-            }
-        })
-    
-    # Export roads as lines
-    for road in ROADS.values():
-        from_j = JUNCTIONS[road.from_junction]
-        to_j = JUNCTIONS[road.to_junction]
-        features.append({
-            "type": "Feature",
-            "geometry": {
-                "type": "LineString",
-                "coordinates": [
-                    [from_j.lon, from_j.lat],
-                    [to_j.lon, to_j.lat]
-                ]
-            },
-            "properties": {
-                "id": road.id,
-                "name": road.name,
-                "type": "road",
-                "length_km": road.length_km,
-                "lanes": road.lanes,
-                "speed_limit": road.speed_limit_kmh,
-                "capacity": road.capacity_vehicles
-            }
-        })
-    
-    geojson = {
-        "type": "FeatureCollection",
-        "features": features
-    }
-    
-    with open(filepath, 'w') as f:
-        json.dump(geojson, f, indent=2)
 
 
 if __name__ == "__main__":
     # Print network summary
+    import json
     summary = get_network_summary()
-    print("Network Summary:")
+    print("MapYourWay Mumbai Network Summary:")
     print(json.dumps(summary, indent=2))
     
     # Example: Find connected roads
-    print("\nRoads connected to Central Square (J2):")
-    for road in get_connected_roads("J2"):
-        print(f"  {road.id}: {road.name}")
+    print("\nRoads connected to Andheri (Western & Central hub):")
+    for road in SEGMENTS:
+        if "Andheri" in (road["node_a"], road["node_b"]):
+            print(f"  {road['segment_id']}: {road['name']}")

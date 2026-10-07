@@ -14,7 +14,17 @@ Design and implement a real-time analytics pipeline for a Smart City Transportat
 - **Supports SDG Goal 11** – Sustainable Cities & Communities
 - **Enables energy-efficient** and data-driven public transportation management
 
-## Architecture
+## 🚂 Mumbai's Transportation Network
+
+The system covers Mumbai's major arterial routes:
+- **Western Line**: Borivali → Malad → Goregaon → Andheri → Santacruz → Bandra → Mahim → Dadar → Worli
+- **Central Line**: Ghatkopar → Kurla → Sion → Dadar
+- **Cross-connections**: Powai, multiple inter-line connections
+
+### Road Network:
+- **13 Major Junctions**: From Borivali (North) to Worli (South)
+- **19 Road Segments**: Covering ~25 km of Mumbai's busiest corridors
+- **Real GPS Coordinates**: Actual Mumbai locations for accurate simulation
 
 The system consists of:
 - **Kafka**: Message broker for real-time data streams
