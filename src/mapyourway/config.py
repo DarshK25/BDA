@@ -1,5 +1,5 @@
 """
-Configuration and constants for the CGLS system.
+Configuration and constants for the MapYourWay system (Mumbai Traffic Analytics).
 Defines Kafka topics, data folders, window sizes, and system parameters.
 """
 
@@ -12,12 +12,12 @@ from typing import Dict, Any
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 
-# Topic names
-TOPIC_GPS = "cgls.gps"
-TOPIC_SENSOR = "cgls.sensor"
-TOPIC_WEATHER = "cgls.weather"
-TOPIC_CONGESTION = "cgls.congestion"
-TOPIC_ROUTES = "cgls.routes"
+# Topic names for MapYourWay Mumbai
+TOPIC_GPS = "mapyourway.gps"
+TOPIC_SENSOR = "mapyourway.sensor"
+TOPIC_WEATHER = "mapyourway.weather"
+TOPIC_CONGESTION = "mapyourway.congestion"
+TOPIC_ROUTES = "mapyourway.routes"
 
 ALL_INPUT_TOPICS = [TOPIC_GPS, TOPIC_SENSOR, TOPIC_WEATHER]
 ALL_OUTPUT_TOPICS = [TOPIC_CONGESTION, TOPIC_ROUTES]

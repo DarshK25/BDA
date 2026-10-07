@@ -17,7 +17,7 @@ services:
   # ---------------------------------------------------------------- message broker
   kafka:
     image: apache/kafka:3.8.0
-    container_name: cgls-kafka
+    container_name: mapyourway-kafka
     ports:
       - "29092:29092"           # for tools running on Windows itself (optional)
     environment:
@@ -59,16 +59,16 @@ services:
   # ---------------------------------------------------------------- data sources
   simulator:
     <<: *app
-    container_name: cgls-simulator
+    container_name: mapyourway-simulator
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-    command: python -m cgls.simulator.producer --vehicles 300
+    command: python -m mapyourway.simulator.producer --vehicles 300
 
   # ---------------------------------------------------------------- stream processing
   spark:
     <<: *app
-    container_name: cgls-spark
+    container_name: mapyourway-spark
     depends_on:
       kafka-init:
         condition: service_completed_successfully
@@ -83,13 +83,13 @@ services:
   # ---------------------------------------------------------------- dashboard
   dashboard:
     <<: *app
-    container_name: cgls-dashboard
+    container_name: mapyourway-dashboard
     depends_on:
       kafka-init:
         condition: service_completed_successfully
     ports:
       - "8501:8501"             # http://localhost:8501
-    command: streamlit run src/cgls/dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --browser.gatherUsageStats false
+    command: streamlit run src/mapyourway/dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --browser.gatherUsageStats false
 
   # ---------------------------------------------------------------- R analytics (optional, profile "r")
   r-analytics:                  # Shiny app -> http://localhost:3838

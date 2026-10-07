@@ -1,8 +1,8 @@
-# UrbanFlow - Smart City Transportation System
+# MapYourWay - Mumbai Smart Traffic Analytics
 
-## Real-Time Analytics using Apache Spark Streaming
+## Real-Time Traffic Intelligence for Mumbai's Western & Central Lines
 
-A comprehensive real-time data processing system that collects and analyzes GPS and sensor data to provide traffic congestion updates and route optimization for sustainable urban transportation.
+A comprehensive real-time data processing system specifically designed for Mumbai's transportation network. Analyzes GPS and sensor data from Western and Central railway lines to provide traffic congestion updates and route optimization for sustainable urban transportation.
 
 ## Problem Statement
 
@@ -47,7 +47,7 @@ docker-compose down
 ├── pytest.ini               # Test configuration
 ├── conf/
 │   └── log4j2.properties    # Spark logging configuration
-├── src/cgls/                # Main application package
+├── src/mapyourway/          # Main application package
 │   ├── config.py            # Configuration and constants
 │   ├── network.py           # Road network topology (13 junctions, 19 roads)
 │   ├── traffic_model.py     # Traffic physics simulation
