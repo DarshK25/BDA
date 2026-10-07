@@ -1,4 +1,4 @@
-# BDA - Smart City Transportation System
+# UrbanFlow - Smart City Transportation System
 
 ## Real-Time Analytics using Apache Spark Streaming
 
