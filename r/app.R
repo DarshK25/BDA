@@ -1,4 +1,4 @@
-# Shiny Dashboard for CGLS Traffic Analytics
+# Shiny Dashboard for MapYourWay Traffic Analytics
 # Real-time visualization of traffic congestion and patterns
 
 library(shiny)
@@ -7,11 +7,11 @@ library(tidyverse)
 library(plotly)
 library(DT)
 
-source("/app/r/common.R")
+source("/app/common.R")
 
 # UI Definition
 ui <- dashboardPage(
-  dashboardHeader(title = "CGLS Traffic Analytics"),
+  dashboardHeader(title = "MapYourWay Traffic Analytics"),
   
   dashboardSidebar(
     sidebarMenu(
@@ -136,16 +136,18 @@ server <- function(input, output, session) {
   
   # Reactive data loading
   data <- reactiveVal(NULL)
+  data_path <- Sys.getenv("MAPYOURWAY_ANALYTICS_PATH", "/data/export/congestion.csv")
   
   # Load data on startup
   observe({
-    data(load_congestion_data())
+    invalidateLater(30000, session)
+    data(load_congestion_data(data_path))
   })
   
   # Refresh button
   observeEvent(input$refresh, {
     showNotification("Refreshing data...", type = "message")
-    data(load_congestion_data())
+    data(load_congestion_data(data_path))
     showNotification("Data refreshed!", type = "message", duration = 2)
   })
   
@@ -165,8 +167,8 @@ server <- function(input, output, session) {
   
   output$total_vehicles <- renderValueBox({
     df <- data()
-    total <- if (!is.null(df)) sum(df$vehicle_count, na.rm = TRUE) else 0
-    valueBox(total, "Total Vehicles", icon = icon("car"), color = "purple")
+    total <- if (!is.null(df) && any(!is.na(df$vehicle_count))) sum(df$vehicle_count, na.rm = TRUE) else "N/A"
+    valueBox(total, "Estimated Derived Vehicles", icon = icon("car"), color = "purple")
   })
   
   # Congestion timeline

@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+
+# Secrets and local environment files
+.env
+*.env
+.gitattributes
+
+# Documentation
+README.md
+docs/
+_reference/
+*.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Data (generated at runtime)
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.bak

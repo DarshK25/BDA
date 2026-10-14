@@ -9,11 +9,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install R packages
-RUN R -e "install.packages(c('tidyverse', 'plotly', 'shiny', 'shinydashboard', 'DT', 'jsonlite', 'lubridate', 'ggplot2', 'dplyr', 'readr'), repos='https://cloud.r-project.org/')"
+RUN R -e "install.packages(c('tidyverse', 'plotly', 'shiny', 'shinydashboard', 'DT', 'jsonlite', 'lubridate', 'ggplot2', 'dplyr', 'readr', 'arrow'), repos='https://cloud.r-project.org/')"
 
 # Copy R scripts
-COPY common.R /app/r/
-COPY analysis.R /app/r/
+COPY common.R /app/
+COPY analysis.R /app/
 COPY app.R /srv/shiny-server/
 
 # Expose Shiny port

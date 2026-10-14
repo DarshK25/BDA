@@ -1,7 +1,7 @@
 # Statistical analysis script for CGLS data
 # Run this script to generate reports and analysis
 
-source("/app/r/common.R")
+source("/app/common.R")
 
 library(tidyverse)
 library(lubridate)
@@ -64,6 +64,32 @@ main <- function() {
     )
   
   print(dow_pattern)
+
+  # Produce portable PNG reports alongside the machine-readable JSON output.
+  report_dir <- "/data/reports/r"
+  dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
+  if (nrow(data) > 0) {
+    timeline_plot <- data %>%
+      group_by(timestamp) %>%
+      summarise(avg_congestion = mean(congestion_level, na.rm = TRUE), .groups = "drop") %>%
+      ggplot(aes(timestamp, avg_congestion)) +
+      geom_line(color = "#3498db") +
+      labs(title = "Mumbai Congestion Over Time", x = "Time (Asia/Kolkata)", y = "Congestion") +
+      theme_minimal()
+    ggsave(file.path(report_dir, "congestion_timeline.png"), timeline_plot, width = 10, height = 5, dpi = 120)
+  }
+  road_plot <- congested_roads %>%
+    ggplot(aes(reorder(road_id, avg_congestion), avg_congestion)) +
+    geom_col(fill = "#e74c3c") + coord_flip() +
+    labs(title = "Most Congested Mumbai Road Links", x = "Road", y = "Average congestion") +
+    theme_minimal()
+  ggsave(file.path(report_dir, "top_congested_roads.png"), road_plot, width = 9, height = 6, dpi = 120)
+  hourly_plot <- peak_hours %>%
+    ggplot(aes(hour, avg_congestion)) + geom_col(fill = "#9b59b6") +
+    labs(title = "Peak Congestion Hours", x = "Hour (Asia/Kolkata)", y = "Average congestion") +
+    theme_minimal()
+  ggsave(file.path(report_dir, "peak_hours.png"), hourly_plot, width = 8, height = 5, dpi = 120)
+  write_csv(summary_stats, file.path(report_dir, "road_summary.csv"))
   
   # Export results
   results <- list(
@@ -74,7 +100,7 @@ main <- function() {
     analysis_timestamp = Sys.time()
   )
   
-  output_path <- "/app/data/reports/analysis_results.json"
+  output_path <- "/data/reports/analysis_results.json"
   dir.create(dirname(output_path), recursive = TRUE, showWarnings = FALSE)
   write_json(results, output_path, pretty = TRUE, auto_unbox = TRUE)
   

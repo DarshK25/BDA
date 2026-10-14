@@ -59,12 +59,10 @@ data/
 logs/
 *.log.*
 
-# Docker
-.dockerignore
-
 # Testing
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
 

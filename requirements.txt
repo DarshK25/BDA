@@ -8,13 +8,11 @@ numpy==1.26.4
 pyarrow==17.0.0
 
 # Machine learning
-scikit-learn==1.3.2
+# Spark MLlib is provided by pyspark; no separate sklearn runtime is needed.
 
 # Visualization
 streamlit==1.41.0
 plotly==5.24.1
-matplotlib==3.8.2
-seaborn==0.13.0
 
 # Network
 networkx==3.3
@@ -25,16 +23,5 @@ requests==2.31.0
 
 # Testing
 pytest==8.3.4
-pytest-cov==4.1.0
-pytest-mock==3.12.0
-
-# Development
-black==23.12.1
-flake8==6.1.0
-mypy==1.7.1
-
-# Logging
-loguru==0.7.2
-
-# Graph algorithms for routing (A* and Dijkstra)
-networkx==3.3
+pytest-cov==6.0.0
+streamlit-autorefresh==1.0.1

@@ -1,0 +1,123 @@
+name: cgls
+
+x-app: &app
+  build: .
+  image: cgls-app
+  volumes:
+    - ./src:/app/src            # edit code on Windows, no rebuild needed
+    - ./tests:/app/tests
+    - ./conf:/app/conf
+    - ./data:/data              # results (Parquet, model, reports) appear in your ./data folder
+    - checkpoints:/checkpoints  # Spark checkpoints live in a Docker volume (fast + reliable on Windows)
+  environment:
+    KAFKA_BOOTSTRAP: kafka:9092
+
+services:
+  # ---------------------------------------------------------------- message broker
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: cgls-kafka
+    ports:
+      - "29092:29092"           # for tools running on Windows itself (optional)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_RETENTION_HOURS: 6        # keeps disk use small
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 15s
+
+  # creates the four topics once, then exits
+  kafka-init:
+    image: apache/kafka:3.8.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for t in gps_events sensor_events weather_events congestion_updates incident_alerts; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$t --partitions 3 --replication-factor 1
+        done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+
+  # ---------------------------------------------------------------- data sources
+  simulator:
+    <<: *app
+    container_name: cgls-simulator
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    command: python -m cgls.simulator.producer --vehicles 300
+
+  # ---------------------------------------------------------------- stream processing
+  spark:
+    <<: *app
+    container_name: cgls-spark
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "4040:4040"             # Spark UI -> http://localhost:4040
+    command: >
+      spark-submit --master local[2] --driver-memory 2g
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3
+      --conf spark.driver.extraJavaOptions=-Dlog4j2.configurationFile=file:/app/conf/log4j2.properties
+      /app/src/cgls/streaming/job.py
+
+  # ---------------------------------------------------------------- dashboard
+  dashboard:
+    <<: *app
+    container_name: cgls-dashboard
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8501:8501"             # http://localhost:8501
+    command: streamlit run src/cgls/dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --browser.gatherUsageStats false
+
+  # ---------------------------------------------------------------- R analytics (optional, profile "r")
+  r-analytics:                  # Shiny app -> http://localhost:3838
+    profiles: ["r"]
+    build: ./r
+    image: cgls-r
+    container_name: cgls-r
+    ports:
+      - "3838:3838"
+    volumes:
+      - ./r:/app
+      - ./data:/data
+    command: Rscript -e "shiny::runApp('/app/app.R', host='0.0.0.0', port=3838)"
+
+  r-report:                     # one-off ggplot2 report -> data/reports/r/*.png
+    profiles: ["r"]
+    build: ./r
+    image: cgls-r
+    volumes:
+      - ./r:/app
+      - ./data:/data
+    command: Rscript /app/analysis.R
+    restart: "no"
+
+  # ---------------------------------------------------------------- one-off helper (not started by 'up')
+  tools:
+    <<: *app
+    profiles: ["tools"]
+    command: python -m pytest -q
+
+volumes:
+  checkpoints:

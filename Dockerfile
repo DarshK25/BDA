@@ -5,6 +5,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/src \
     PIP_NO_CACHE_DIR=1 \
+    PYSPARK_PYTHON=/usr/local/bin/python \
+    PYSPARK_DRIVER_PYTHON=/usr/local/bin/python \
     SPARK_LOCAL_IP=127.0.0.1
 
 # Java is required by Spark
@@ -14,7 +16,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --timeout 300 --retries 5 -r requirements.txt
 
 # Download the Spark-Kafka connector jars now, so the first run does not need to.
 # (If this step fails the jars are simply downloaded at first start instead.)

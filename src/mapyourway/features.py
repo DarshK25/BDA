@@ -82,8 +82,9 @@ def create_lag_features(df: pd.DataFrame, lags: List[int] = [1, 2, 3]) -> pd.Dat
         df[f"occupancy_lag_{lag}"] = df.groupby("road_id")["avg_occupancy"].shift(lag)
         df[f"congestion_lag_{lag}"] = df.groupby("road_id")["congestion_level"].shift(lag)
     
-    # Fill NaN values with forward fill
-    df = df.fillna(method="ffill").fillna(0)
+    # Missing history belongs to this road, never to the previous road's row.
+    lag_columns = [c for c in df.columns if "_lag_" in c]
+    df[lag_columns] = df[lag_columns].fillna(0)
     
     return df
 
@@ -116,7 +117,8 @@ def engineer_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
 def create_model_features(raw_data: pd.DataFrame) -> pd.DataFrame:
     """
     Main feature engineering pipeline.
-    Transforms raw data into the 5 core features + additional features.
+    Transforms raw data into the canonical five live-stream features plus
+    additional exploratory features.
     
     Expected raw_data columns:
         - timestamp
@@ -133,10 +135,18 @@ def create_model_features(raw_data: pd.DataFrame) -> pd.DataFrame:
     # Ensure timestamp is datetime
     if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
         df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    if "road_id" not in df.columns:
+        df["road_id"] = df.get("segment_id", "all")
+    if "avg_speed" not in df.columns:
+        df["avg_speed"] = df.get("current_speed_kmph", df.get("current_speed", 0.0))
+    if "avg_occupancy" not in df.columns:
+        occupancy = df.get("occupancy_pct", 0.0)
+        df["avg_occupancy"] = occupancy / 100.0 if hasattr(occupancy, "__truediv__") else occupancy
     
     # Extract time features
     time_features = df["timestamp"].apply(extract_time_features)
-    time_df = pd.DataFrame(time_features.tolist())
+    time_df = pd.DataFrame(time_features.tolist(), index=df.index)
     df = pd.concat([df, time_df], axis=1)
     
     # Calculate rolling features
@@ -145,25 +155,64 @@ def create_model_features(raw_data: pd.DataFrame) -> pd.DataFrame:
     # Create interaction features
     df = engineer_interaction_features(df)
     
-    # Select the 5 core features for modeling
+    # Keep the Python batch feature path aligned with the Spark path and
+    # ml/train.py.  Existing notebooks may still provide the older avg_*
+    # names, so normalize those names here rather than silently producing a
+    # different model input vector.
+    if "speed_ratio" not in df.columns:
+        if {"avg_speed", "free_flow_kmph"}.issubset(df.columns):
+            df["speed_ratio"] = (
+                df["avg_speed"] / df["free_flow_kmph"].replace(0, np.nan)
+            ).fillna(1.0)
+        elif {"avg_speed", "free_flow_speed_kmph"}.issubset(df.columns):
+            df["speed_ratio"] = (
+                df["avg_speed"] / df["free_flow_speed_kmph"].replace(0, np.nan)
+            ).fillna(1.0)
+        else:
+            df["speed_ratio"] = 1.0
+
+    if "occupancy_pct" not in df.columns:
+        if "avg_occupancy" in df.columns:
+            occupancy = df["avg_occupancy"]
+            df["occupancy_pct"] = occupancy * 100.0 if occupancy.max() <= 1 else occupancy
+        else:
+            df["occupancy_pct"] = 0.0
+
+    if "veh_per_lane" not in df.columns:
+        if "flow_per_lane" in df.columns:
+            df["veh_per_lane"] = df["flow_per_lane"]
+        elif "vehicle_count" in df.columns and "lanes" in df.columns:
+            df["veh_per_lane"] = df["vehicle_count"] / df["lanes"].replace(0, np.nan)
+        elif "vehicle_count" in df.columns:
+            df["veh_per_lane"] = df["vehicle_count"]
+        else:
+            df["veh_per_lane"] = 0.0
+
+    if "rain_mm_hr" not in df.columns:
+        df["rain_mm_hr"] = df.get("rain", 0.0)
+    if "visibility_km" not in df.columns:
+        df["visibility_km"] = df.get("visibility", 10.0)
+    if "visibility" in df.columns and "visibility_km" not in raw_data.columns:
+        df["visibility_km"] = df["visibility_km"].where(
+            df["visibility_km"] <= 100, df["visibility_km"] / 1000.0
+        )
+
     feature_columns = [
-        "avg_speed",
-        "avg_occupancy", 
-        "vehicle_count",
-        "time_of_day_sin",
-        "time_of_day_cos"
+        "speed_ratio",
+        "occupancy_pct",
+        "veh_per_lane",
+        "rain_mm_hr",
+        "visibility_km",
     ]
-    
-    # Ensure all features exist
-    for col in feature_columns:
-        if col not in df.columns:
-            df[col] = 0.0
-    
+    for column in feature_columns:
+        df[column] = df[column].fillna(0.0)
+
     return df
 
 
-def normalize_features(df: pd.DataFrame, 
-                      feature_cols: List[str]) -> Tuple[pd.DataFrame, Dict]:
+def normalize_features(
+    df: pd.DataFrame, feature_cols: List[str]
+) -> Tuple[pd.DataFrame, Dict]:
     """
     Normalize features using min-max scaling.
     
@@ -192,9 +241,11 @@ def normalize_features(df: pd.DataFrame,
     return df_normalized, normalization_params
 
 
-def denormalize_features(df: pd.DataFrame, 
-                        feature_cols: List[str],
-                        normalization_params: Dict) -> pd.DataFrame:
+def denormalize_features(
+    df: pd.DataFrame,
+    feature_cols: List[str],
+    normalization_params: Dict,
+) -> pd.DataFrame:
     """
     Reverse normalization using stored parameters.
     
@@ -225,7 +276,9 @@ if __name__ == "__main__":
     from datetime import datetime, timedelta
     
     # Create sample data
-    timestamps = [datetime.now() - timedelta(minutes=10*i) for i in range(10, 0, -1)]
+    timestamps = [
+        datetime.now() - timedelta(minutes=10 * i) for i in range(10, 0, -1)
+    ]
     
     sample_data = pd.DataFrame({
         "timestamp": timestamps,
@@ -242,8 +295,17 @@ if __name__ == "__main__":
     features = create_model_features(sample_data)
     
     print("\nEngineered Features:")
-    print(features[["avg_speed", "avg_occupancy", "vehicle_count", 
-                   "time_of_day_sin", "time_of_day_cos"]].head())
+    print(
+        features[
+            [
+                "avg_speed",
+                "avg_occupancy",
+                "vehicle_count",
+                "time_of_day_sin",
+                "time_of_day_cos",
+            ]
+        ].head()
+    )
     
     print("\nAdditional Features:")
     print(features[["speed_rolling_avg", "speed_rolling_std"]].head())

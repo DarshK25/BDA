@@ -11,7 +11,29 @@ x-app: &app
     - ./data:/data              # results (Parquet, model, reports) appear in your ./data folder
     - checkpoints:/checkpoints  # Spark checkpoints live in a Docker volume (fast + reliable on Windows)
   environment:
-    KAFKA_BOOTSTRAP: kafka:9092
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    DATA_DIR: /data
+    CHECKPOINT_DIR: /checkpoints
+    CHECKPOINT_VERSION: ${CHECKPOINT_VERSION:-congestion-output-v2}
+    TOMTOM_POLL_INTERVAL_SECONDS: ${TOMTOM_POLL_INTERVAL_SECONDS:-900}
+    TRAFFIC_EMIT_INTERVAL_SECONDS: ${TRAFFIC_EMIT_INTERVAL_SECONDS:-10}
+    OPEN_METEO_POLL_INTERVAL_SECONDS: ${OPEN_METEO_POLL_INTERVAL_SECONDS:-300}
+    LAKE_MAX_GB: ${LAKE_MAX_GB:-1.0}
+    MODEL_PATH: /data/models/congestion_model
+    # Underscore topic names are compatible with the original broker volume;
+    # Kafka treats dots and underscores as equivalent metric names.
+    MAPYOURWAY_TOPIC_GPS: ${MAPYOURWAY_TOPIC_GPS:-mapyourway.gps_events}
+    MAPYOURWAY_TOPIC_SENSOR: ${MAPYOURWAY_TOPIC_SENSOR:-mapyourway.sensor_events}
+    MAPYOURWAY_TOPIC_WEATHER: ${MAPYOURWAY_TOPIC_WEATHER:-mapyourway.weather_events}
+    MAPYOURWAY_TOPIC_CONGESTION: ${MAPYOURWAY_TOPIC_CONGESTION:-mapyourway.congestion_predictions}
+    MAPYOURWAY_TOPIC_ROUTES: ${MAPYOURWAY_TOPIC_ROUTES:-mapyourway.routes}
+    # Live TomTom raster traffic proxy.  The browser reaches it on the published
+    # host port; the dashboard container checks its health on the compose
+    # network, so the internal URL must use the service name, not localhost.
+    TRAFFIC_TILE_INTERNAL_URL: ${TRAFFIC_TILE_INTERNAL_URL:-http://tiles:8502}
+    TRAFFIC_TILE_PUBLIC_URL: ${TRAFFIC_TILE_PUBLIC_URL:-http://localhost:8502}
+    OSM_TILE_URL: ${OSM_TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
+    TRAFFIC_TILE_CORS_ORIGIN: ${TRAFFIC_TILE_CORS_ORIGIN:-http://localhost:8501}
 
 services:
   # ---------------------------------------------------------------- message broker
@@ -34,32 +56,59 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_LOG_RETENTION_HOURS: 6        # keeps disk use small
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
-      interval: 10s
-      timeout: 10s
-      retries: 18
-      start_period: 15s
+      interval: 15s
+      timeout: 30s
+      retries: 30
+      start_period: 60s
 
-  # creates the four topics once, then exits
+  # creates the topics once, then exits
   kafka-init:
     image: apache/kafka:3.8.0
     depends_on:
       kafka:
         condition: service_healthy
     restart: "no"
+    environment:
+      MAPYOURWAY_TOPIC_GPS: ${MAPYOURWAY_TOPIC_GPS:-mapyourway.gps_events}
+      MAPYOURWAY_TOPIC_SENSOR: ${MAPYOURWAY_TOPIC_SENSOR:-mapyourway.sensor_events}
+      MAPYOURWAY_TOPIC_WEATHER: ${MAPYOURWAY_TOPIC_WEATHER:-mapyourway.weather_events}
+      MAPYOURWAY_TOPIC_CONGESTION: ${MAPYOURWAY_TOPIC_CONGESTION:-mapyourway.congestion_predictions}
+      MAPYOURWAY_TOPIC_ROUTES: ${MAPYOURWAY_TOPIC_ROUTES:-mapyourway.routes}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        for t in gps_events sensor_events weather_events congestion_updates incident_alerts; do
-          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$t --partitions 3 --replication-factor 1
+        set -eu
+        bootstrap=kafka:9092
+        topics="$$MAPYOURWAY_TOPIC_GPS $$MAPYOURWAY_TOPIC_SENSOR $$MAPYOURWAY_TOPIC_WEATHER $$MAPYOURWAY_TOPIC_CONGESTION $$MAPYOURWAY_TOPIC_ROUTES"
+        for t in $$topics; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$bootstrap --create --if-not-exists --topic $$t --partitions 3 --replication-factor 1
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$bootstrap --describe --topic $$t >/dev/null
         done
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$bootstrap --list
+
+  # ---------------------------------------------------------------- model bootstrap
+  # Produces a real Spark PipelineModel before the stream starts.  It is a
+  # calibrated startup model only; retrain with independent labelled data for
+  # a production accuracy claim.
+  model-init:
+    <<: *app
+    container_name: mapyourway-model-init
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    command: python -m mapyourway.ml.bootstrap
+    restart: "no"
 
   # ---------------------------------------------------------------- data sources (REAL TRAFFIC DATA)
   simulator:
     <<: *app
     container_name: mapyourway-simulator
+    restart: unless-stopped
     depends_on:
       kafka-init:
         condition: service_completed_successfully
@@ -71,8 +120,11 @@ services:
   spark:
     <<: *app
     container_name: mapyourway-spark
+    restart: unless-stopped          # self-heal after a transient executor/heartbeat crash
     depends_on:
       kafka-init:
+        condition: service_completed_successfully
+      model-init:
         condition: service_completed_successfully
     ports:
       - "4040:4040"             # Spark UI -> http://localhost:4040
@@ -80,15 +132,37 @@ services:
       spark-submit --master local[2] --driver-memory 2g
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3
       --conf spark.driver.extraJavaOptions=-Dlog4j2.configurationFile=file:/app/conf/log4j2.properties
+      --conf spark.network.timeout=600s
+      --conf spark.executor.heartbeatInterval=60s
+      --conf spark.rpc.askTimeout=600s
+      --conf spark.rpc.lookupTimeout=600s
       /app/src/mapyourway/streaming/job.py
+
+  # ---------------------------------------------------------------- live traffic raster proxy
+  # Server-side proxy for TomTom flow raster tiles.  The browser only ever
+  # talks to this process on the published port; the API key stays server-side.
+  tiles:
+    <<: *app
+    container_name: mapyourway-tiles
+    restart: unless-stopped
+    env_file:
+      - .env  # Load TomTom API key from .env
+    ports:
+      - "8502:8502"             # http://localhost:8502/tiles/{z}/{x}/{y}.png
+    command: python -m mapyourway.dashboard.traffic_tiles
 
   # ---------------------------------------------------------------- dashboard
   dashboard:
     <<: *app
     container_name: mapyourway-dashboard
+    restart: unless-stopped
     depends_on:
       kafka-init:
         condition: service_completed_successfully
+      spark:
+        condition: service_started
+      tiles:
+        condition: service_started
     ports:
       - "8501:8501"             # http://localhost:8501
     command: streamlit run src/mapyourway/dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --browser.gatherUsageStats false
@@ -124,6 +198,7 @@ services:
 
 volumes:
   checkpoints:
+  kafka-data:
 
 
 # version: '3.8'
@@ -277,4 +352,3 @@ volumes:
 # volumes:
 #   kafka-data:
 #   zookeeper-data:
-
