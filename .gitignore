@@ -47,6 +47,10 @@ env/
 # Data directories (generated at runtime)
 data/
 !data/.gitkeep
+!src/mapyourway/data/
+!src/mapyourway/data/mumbai_roads.json
+src/mapyourway/dashboard/static/config.json
+src/mapyourway/dashboard/static/view.json
 
 # Models
 *.pkl

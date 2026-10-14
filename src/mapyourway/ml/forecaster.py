@@ -1,85 +1,82 @@
-"""Load the trained RandomForest model and predict congestion levels from feature dicts.
+"""Next-step congestion model trained only on rows this live stream has seen.
 
-This is the inference companion to train.py. The streaming job uses this to classify
-each 30-second window after computing features.
+Until a few hundred real rows exist, the forecast is persistence: the next
+reading will look like the current one. After that, a small random forest is
+fit on the stream itself. The dashboard reports the holdout error of that fit.
+There is no pre-baked accuracy number.
 """
 from __future__ import annotations
 
-import os
-from typing import TYPE_CHECKING
-
-from mapyourway import config
-
-if TYPE_CHECKING:
-    from pyspark.ml import PipelineModel
+import math
+import random
 
 
-class CongestionForecaster:
-    """Wraps the PySpark MLlib RandomForest pipeline for batch prediction."""
-
-    def __init__(self, model_dir: str = config.MODEL_PATH):
-        from pyspark.sql import SparkSession
-
-        self.spark = SparkSession.getActiveSession()
-        if self.spark is None:
-            raise RuntimeError("No active SparkSession. Create one before instantiating CongestionForecaster.")
-        
-        if not os.path.exists(model_dir):
-            raise FileNotFoundError(
-                f"Model directory not found: {model_dir}\n"
-                f"Run 'python -m mapyourway.ml.train' first to train the model."
-            )
-        
-        from pyspark.ml import PipelineModel
-        self.model: PipelineModel = PipelineModel.load(model_dir)
-        print(f"[forecaster] loaded model from {model_dir}", flush=True)
-
-    def predict_batch(self, feature_dicts: list[dict]) -> list[dict]:
-        """
-        Predict congestion levels for a batch of feature dictionaries.
-        
-        Args:
-            feature_dicts: list of dicts with keys matching config.FEATURES
-        
-        Returns:
-            list of dicts with original features plus 'prediction' and 'probability' keys
-        """
-        if not feature_dicts:
-            return []
-        
-        import pandas as pd
-        
-        # Convert to Spark DataFrame
-        pdf = pd.DataFrame(feature_dicts)
-        df = self.spark.createDataFrame(pdf)
-        
-        # Predict
-        pred_df = self.model.transform(df)
-        
-        # Convert back to list of dicts
-        result_pdf = pred_df.toPandas()
-        results = []
-        for _, row in result_pdf.iterrows():
-            result = row.to_dict()
-            # Extract prediction and probability
-            result['prediction'] = int(result.get('prediction', 0))
-            # Probability is a DenseVector, convert to list
-            if 'probability' in result:
-                prob_vector = result['probability']
-                if hasattr(prob_vector, 'toArray'):
-                    result['probability'] = prob_vector.toArray().tolist()
-                elif hasattr(prob_vector, '__iter__'):
-                    result['probability'] = list(prob_vector)
-            results.append(result)
-        
-        return results
-
-    def predict_single(self, feature_dict: dict) -> dict:
-        """Convenience method for single prediction."""
-        results = self.predict_batch([feature_dict])
-        return results[0] if results else {}
+def _hour_cycle(ts_ms: int) -> tuple[float, float]:
+    # Asia/Kolkata is UTC+5:30. Spark and the producer stamp unix milliseconds.
+    seconds = ts_ms / 1000.0 + 5.5 * 3600.0
+    hour = (seconds % 86400) / 3600.0
+    angle = (hour / 24.0) * 2.0 * math.pi
+    return math.sin(angle), math.cos(angle)
 
 
-def load_forecaster(model_dir: str = config.MODEL_PATH) -> CongestionForecaster:
-    """Factory function to create a forecaster instance."""
-    return CongestionForecaster(model_dir=model_dir)
+class NextStepModel:
+    def __init__(self) -> None:
+        self.rows: list[tuple[list[float], float]] = []
+        self.model = None
+        self.mae: float | None = None
+        self.kind = "persistence"
+        self._since_train = 0
+
+    def observe(self, features: list[float], target: float) -> None:
+        self.rows.append((features, target))
+        if len(self.rows) > 8000:
+            self.rows = self.rows[-6000:]
+
+    def maybe_train(self) -> None:
+        self._since_train += 1
+        if len(self.rows) < 400 or self._since_train < 6:
+            return
+        self._since_train = 0
+        try:
+            from sklearn.ensemble import RandomForestRegressor
+        except Exception as exc:  # pragma: no cover - dependency is in the image
+            print(f"[model] sklearn unavailable: {exc}", flush=True)
+            return
+        rows = list(self.rows)
+        random.Random(7).shuffle(rows)
+        cut = max(1, int(len(rows) * 0.8))
+        train, holdout = rows[:cut], rows[cut:]
+        model = RandomForestRegressor(
+            n_estimators=40,
+            max_depth=8,
+            min_samples_leaf=5,
+            random_state=7,
+            n_jobs=1,
+        )
+        model.fit([features for features, _ in train], [target for _, target in train])
+        if holdout:
+            errors = [
+                abs(float(model.predict([features])[0]) - target) for features, target in holdout
+            ]
+            self.mae = sum(errors) / len(errors)
+        self.model = model
+        self.kind = "random_forest"
+        print(f"[model] trained on {len(train)} rows, holdout MAE {self.mae}", flush=True)
+
+    def predict(self, features: list[float], fallback: float) -> float:
+        if self.model is None:
+            return fallback
+        value = float(self.model.predict([features])[0])
+        return max(0.0, min(1.0, value))
+
+    def status(self) -> dict:
+        return {
+            "kind": self.kind,
+            "rows": len(self.rows),
+            "mae": None if self.mae is None else round(self.mae, 4),
+        }
+
+
+def features_of(speed: float, occupancy: float, rain: float, ts_ms: int) -> list[float]:
+    sin_h, cos_h = _hour_cycle(ts_ms)
+    return [float(speed), float(occupancy), float(rain), sin_h, cos_h]
