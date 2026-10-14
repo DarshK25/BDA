@@ -1,5 +1,5 @@
-# Statistical analysis script for CGLS data
-# Run this script to generate reports and analysis
+# Batch report over the Parquet lake that Spark writes every micro-batch.
+# Optional: docker compose --profile r run --rm r-report
 
 source("/app/common.R")
 

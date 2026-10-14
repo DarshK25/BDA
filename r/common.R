@@ -5,7 +5,7 @@ library(tidyverse)
 library(lubridate)
 
 # Load congestion data from CSV or the Spark Parquet lake.
-load_congestion_data <- function(filepath = "/data/export/congestion.csv") {
+load_congestion_data <- function(filepath = Sys.getenv("MAPYOURWAY_ANALYTICS_PATH", "/data/lake/segment_congestion")) {
   if (!file.exists(filepath) && !dir.exists(filepath)) {
     warning(paste("Data file not found:", filepath))
     return(NULL)
@@ -15,7 +15,11 @@ load_congestion_data <- function(filepath = "/data/export/congestion.csv") {
     if (!requireNamespace("arrow", quietly = TRUE)) {
       stop("Reading Parquet requires the arrow R package")
     }
-    data <- as_tibble(arrow::read_parquet(filepath))
+    data <- if (dir.exists(filepath)) {
+      as_tibble(arrow::open_dataset(filepath, format = "parquet") %>% dplyr::collect())
+    } else {
+      as_tibble(arrow::read_parquet(filepath))
+    }
   } else {
     data <- read_csv(filepath, show_col_types = FALSE)
   }
@@ -27,6 +31,15 @@ load_congestion_data <- function(filepath = "/data/export/congestion.csv") {
   }
   if ("current_speed_kmph" %in% names(data) && !"avg_speed" %in% names(data)) {
     data$avg_speed <- data$current_speed_kmph
+  }
+  if ("speed_kmph" %in% names(data) && !"avg_speed" %in% names(data)) {
+    data$avg_speed <- data$speed_kmph
+  }
+  if ("congestion" %in% names(data) && !"congestion_level" %in% names(data)) {
+    data$congestion_level <- data$congestion
+  }
+  if ("ts_ms" %in% names(data) && !"timestamp" %in% names(data)) {
+    data$timestamp <- data$ts_ms
   }
   if ("occupancy_pct" %in% names(data) && !"avg_occupancy" %in% names(data)) {
     data$avg_occupancy <- data$occupancy_pct / 100

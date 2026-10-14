@@ -136,7 +136,7 @@ server <- function(input, output, session) {
   
   # Reactive data loading
   data <- reactiveVal(NULL)
-  data_path <- Sys.getenv("MAPYOURWAY_ANALYTICS_PATH", "/data/export/congestion.csv")
+  data_path <- Sys.getenv("MAPYOURWAY_ANALYTICS_PATH", "/data/lake/segment_congestion")
   
   # Load data on startup
   observe({
