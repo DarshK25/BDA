@@ -42,7 +42,26 @@ WIDTH = {
     "tertiary_link": 1.4,
 }
 HALO = ["#143d8f", "#6d28d9", "#0f766e", "#9a3412"]
-ASSUMED_CLEAR = "#7dcea0"
+ASSUMED_CLEAR = "#c3cad2"
+# Speed as a share of free-flow. Spark's level bins are coarse (anything above
+# 70% of free-flow is "low"), so the route pieces use this finer scale instead.
+RATIO_BANDS = [
+    (0.90, "#1a9850", "flowing"),
+    (0.80, "#a6d96a", "slightly slow"),
+    (0.70, "#fdae61", "slow"),
+    (0.55, "#f46d43", "very slow"),
+    (0.00, "#d73027", "jammed"),
+]
+
+
+def _ratio_band(speed: float | None, free_flow: float | None) -> tuple[str, str, float | None]:
+    if not speed or not free_flow:
+        return ASSUMED_CLEAR, "no sample", None
+    ratio = max(0.0, min(1.0, float(speed) / float(free_flow)))
+    for floor, color, label in RATIO_BANDS:
+        if ratio >= floor:
+            return color, label, ratio
+    return RATIO_BANDS[-1][1], RATIO_BANDS[-1][2], ratio
 
 
 def _write(path: str, payload: dict) -> None:
@@ -74,6 +93,41 @@ def _near(a: list[float], b: list[float]) -> float:
     return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
 
 
+def _jam_factor(lat: float) -> float:
+    """Worst near Andheri and Bandra, easing towards both ends."""
+    if lat > 19.18:
+        return 0.75
+    if lat > 19.13:
+        return 0.6
+    if lat > 19.05:
+        return 0.3
+    return 0.5
+
+
+def _apply_weh_jam(segments_out: dict, speeds: dict[str, float]) -> None:
+    """Demo what-if, switched on from the sidebar. Never written back to Kafka or Spark."""
+    for segment_id, segment in SEGMENT_BY_ID.items():
+        name = segment["name"].lower()
+        if "western express" not in name and "sea link" not in name:
+            continue
+        free_flow = float(segment["free_flow_kmph"])
+        speed = round(free_flow * _jam_factor(float(segment["mid_lat"])), 1)
+        band_color, band, ratio = _ratio_band(speed, free_flow)
+        speeds[segment_id] = speed
+        segments_out[segment_id] = {
+            "band_color": band_color,
+            "band": band,
+            "ratio": round(ratio, 2),
+            "color": band_color,
+            "opacity": 0.95,
+            "width": WIDTH.get(segment.get("road_class"), 3.0),
+            "speed": speed,
+            "level": "simulated",
+            "source": "simulated_jam",
+            "name": segment["name"],
+        }
+
+
 def publish_once() -> None:
     latest = {}
     if os.path.exists(config.LATEST_JSON):
@@ -91,8 +145,12 @@ def publish_once() -> None:
         measured = source in {"tomtom_direct", "tomtom_same_road"}
         level = row.get("level") or "low"
         road_class = row.get("road_class") or "tertiary"
+        band_color, band, ratio = _ratio_band(row.get("speed_kmph"), row.get("free_flow_kmph"))
         segments_out[segment_id] = {
-            "color": COLORS.get(level, "#9aa3ad") if measured else "#4d5966",
+            "band_color": band_color if measured else ASSUMED_CLEAR,
+            "band": band if measured else "no sample",
+            "ratio": None if ratio is None or not measured else round(ratio, 2),
+            "color": band_color if measured else "#4d5966",
             "opacity": 0.95 if measured else 0.55,
             "width": WIDTH.get(road_class, 1.5) if measured else 1.6,
             "speed": row.get("speed_kmph"),
@@ -102,6 +160,9 @@ def publish_once() -> None:
         }
         if row.get("speed_kmph") is not None:
             speeds[segment_id] = float(row["speed_kmph"])
+
+    if ui.get("scenario") == "weh_jam":
+        _apply_weh_jam(segments_out, speeds)
 
     route = None
     origin, dest = ui.get("origin"), ui.get("destination")
@@ -125,6 +186,7 @@ def publish_once() -> None:
                         "label": corridor.label(),
                         "color": HALO[index % len(HALO)],
                         "line": _stitch(corridor.segment_ids),
+                        "segment_ids": list(corridor.segment_ids),
                     }
                 )
                 on_route.update(corridor.segment_ids)
@@ -134,6 +196,9 @@ def publish_once() -> None:
                     segments_out[segment_id]["width"] = max(float(segments_out[segment_id]["width"]), 3.4)
                     continue
                 segments_out[segment_id] = {
+                    "band_color": ASSUMED_CLEAR,
+                    "band": "no sample",
+                    "ratio": None,
                     "color": ASSUMED_CLEAR,
                     "opacity": 0.95,
                     "width": 2.8,
@@ -148,6 +213,24 @@ def publish_once() -> None:
             segments_out = {
                 segment_id: info for segment_id, info in segments_out.items() if segment_id in on_route
             }
+            for item in corridors_out:
+                ids = item.pop("segment_ids")
+                item["pieces"] = [
+                    {
+                        "color": segments_out[segment_id]["band_color"],
+                        "band": segments_out[segment_id]["band"],
+                        "line": _stitch([segment_id]),
+                    }
+                    for segment_id in ids
+                    if segment_id in segments_out
+                ]
+                bands: dict[str, float] = {}
+                for segment_id in ids:
+                    segment = SEGMENT_BY_ID.get(segment_id)
+                    info = segments_out.get(segment_id)
+                    if segment and info:
+                        bands[info["band"]] = bands.get(info["band"], 0.0) + segment["length_km"]
+                item["band_km"] = {name: round(km, 1) for name, km in bands.items()}
             route = {
                 "origin": origin,
                 "destination": dest,
@@ -180,6 +263,7 @@ def publish_once() -> None:
             ),
             "segments": segments_out,
             "route": route,
+            "scenario": ui.get("scenario"),
         },
     )
 

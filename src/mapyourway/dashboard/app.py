@@ -83,6 +83,13 @@ def _map_html(show_local: bool, show_tomtom: bool, origin: str, destination: str
           background:rgba(255,255,255,0.92); color:#1c2430;
           font:12px/1.3 sans-serif; padding:4px 8px; border-radius:4px;
         }}
+        #legend {{
+          position:absolute; right:10px; bottom:24px; z-index:800;
+          background:rgba(255,255,255,0.94); color:#1c2430;
+          font:12px/1.55 sans-serif; padding:6px 10px; border-radius:4px;
+        }}
+        #legend span {{ display:inline-block; width:18px; height:5px; margin-right:6px; vertical-align:middle; }}
+        #legend i {{ display:inline-block; width:18px; margin-right:6px; vertical-align:middle; }}
         .place-label {{
           background:rgba(255,255,255,0.88); border:0; box-shadow:none;
           color:#273444; font:600 11px/1.1 sans-serif; padding:2px 4px;
@@ -98,6 +105,17 @@ def _map_html(show_local: bool, show_tomtom: bool, origin: str, destination: str
     <body>
       <div id="map"></div>
       <div id="status">Loading streets…</div>
+      <div id="legend">
+        <b>Speed vs normal</b><br>
+        <span style="background:#1a9850"></span> 90%+ flowing<br>
+        <span style="background:#a6d96a"></span> 80–90% slightly slow<br>
+        <span style="background:#fdae61"></span> 70–80% slow<br>
+        <span style="background:#f46d43"></span> 55–70% very slow<br>
+        <span style="background:#d73027"></span> under 55% jammed<br>
+        <span style="background:#c3cad2"></span> no live sample<br>
+        <i style="border-top:4px solid #143d8f"></i> fastest route<br>
+        <i style="border-top:4px dashed #6d28d9"></i> other routes
+      </div>
       <script>
         const SHOW_LOCAL = {local_flag};
         const TOMTOM_URL = {tomtom_url};
@@ -143,16 +161,30 @@ def _map_html(show_local: bool, show_tomtom: bool, origin: str, destination: str
             const route = view.route || {{}};
             corridorLines.forEach((line) => line.remove());
             corridorLines = [];
-            (route.corridors || []).forEach((corridor) => {{
+            const ordered = (route.corridors || []).slice().sort((a, b) =>
+              (a.role === 'fastest') - (b.role === 'fastest')
+            );
+            ordered.forEach((corridor) => {{
+              const fastest = corridor.role === 'fastest';
               const halo = setLine(null, corridor.line, {{
-                color: corridor.color || '#143d8f',
-                weight: corridor.role === 'fastest' ? 9 : 6,
-                opacity: corridor.role === 'fastest' ? 0.8 : 0.6,
-                dashArray: corridor.role === 'fastest' ? null : '8 9'
+                color: fastest ? '#143d8f' : (corridor.color || '#6d28d9'),
+                weight: fastest ? 12 : 9,
+                opacity: fastest ? 0.85 : 0.55,
+                dashArray: fastest ? null : '10 8'
               }});
               if (halo) corridorLines.push(halo);
             }});
-            if (roadsLayer) roadsLayer.bringToFront();
+            ordered.forEach((corridor) => {{
+              const weight = corridor.role === 'fastest' ? 6 : 4;
+              (corridor.pieces || []).forEach((piece) => {{
+                const line = setLine(null, piece.line, {{
+                  color: piece.color || '#c3cad2',
+                  weight: weight,
+                  opacity: 1
+                }});
+                if (line) corridorLines.push(line);
+              }});
+            }});
             const measured = view.sampled_total || 0;
             document.getElementById('status').textContent =
               window.__ok + ' streets · ' + measured + ' live samples · ' +
@@ -249,6 +281,11 @@ def _live_panels(origin: str, destination: str) -> None:
     temp = weather.get("temp_c")
     c5.metric("Mumbai weather", "—" if temp is None else f"{temp} °C", f"rain {rain} mm" if rain is not None else None)
 
+    if view.get("scenario") == "weh_jam":
+        st.warning(
+            "Demo scenario on: the Western Express Highway and Sea Link are slowed to 30–75% of normal speed. "
+            "Those roads are simulated. Every other colour is still live data from Spark."
+        )
     route = view.get("route") or {}
     if route.get("error"):
         st.warning(f"No connected drive from {origin} to {destination}: {route['error']}")
@@ -269,13 +306,27 @@ def _live_panels(origin: str, destination: str) -> None:
                 st.write(f"{route['best_min']} min")
         corridors = route.get("corridors") or []
         if corridors:
-            st.markdown("**Other complete drives, timed at the same live speeds**")
-            role_name = {"fastest": "Fastest now", "usual": "Usual road", "alternate": "Another way"}
-            for index, corridor in enumerate(corridors, start=1):
-                st.write(
-                    f"{index}. {role_name.get(corridor.get('role'), 'Another way')} · "
-                    f"{corridor.get('minutes')} min · {corridor.get('km')} km · {corridor.get('label')}"
+            st.markdown("**Routes compared at the same live speeds**")
+            role_name = {"fastest": "Best route", "usual": "Usual road", "alternate": "Alternative"}
+            best_minutes = min(float(c.get("minutes") or 0) for c in corridors)
+            rows = []
+            for corridor in corridors:
+                bands = corridor.get("band_km") or {}
+                slow_km = sum(bands.get(name, 0.0) for name in ("slow", "very slow", "jammed"))
+                rows.append(
+                    {
+                        "route": role_name.get(corridor.get("role"), "Alternative"),
+                        "minutes": corridor.get("minutes"),
+                        "extra min": round(float(corridor.get("minutes") or 0) - best_minutes, 1),
+                        "km": corridor.get("km"),
+                        "flowing km": bands.get("flowing", 0.0),
+                        "slightly slow km": bands.get("slightly slow", 0.0),
+                        "slow or worse km": round(slow_km, 1),
+                        "no sample km": bands.get("no sample", 0.0),
+                        "via": corridor.get("label"),
+                    }
                 )
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         st.caption(
             f"A* expanded {route.get('expanded_astar', '—')} junctions; "
             f"Dijkstra expanded {route.get('expanded_dijkstra', '—')}."
@@ -327,6 +378,12 @@ def main() -> None:
         )
     show_local = st.sidebar.checkbox("Show local streets", value=True)
     show_tomtom = st.sidebar.checkbox("Show provider traffic overlay", value=False)
+    simulate_jam = st.sidebar.checkbox(
+        "Simulate a Western Express Highway jam (demo)",
+        value=False,
+        help="What-if only. Slows the Western Express Highway and Sea Link on this map and in the router. "
+        "Kafka, Spark, and the saved data are not changed.",
+    )
     if show_tomtom and not config.tomtom_flow_tile_url():
         st.sidebar.warning("TomTom overlay needs TOM_TOM_API_KEY.")
     st.sidebar.caption(
@@ -334,15 +391,23 @@ def main() -> None:
         f"{SUMMARY.get('total_length_km', 0)} km from OpenStreetMap."
     )
     st.sidebar.markdown(
-        "Unused streets are gray. Roads on the candidate routes are green, yellow, orange, or red "
-        "using live traffic where sampled and free-flow where no sample exists. "
-        "The solid blue border is the fastest route; dashed borders are alternatives."
+        "Unused streets are gray. Along each route, every road segment is coloured by its live speed "
+        "as a share of its normal free-flow speed: green, light green, orange, red. "
+        "Light gray pieces have no live sample. Solid blue border is the best route; dashed borders are alternatives."
     )
 
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     temporary = CONFIG_PATH + ".tmp"
     with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump({"origin": origin, "destination": destination, "show_local": show_local}, handle)
+        json.dump(
+            {
+                "origin": origin,
+                "destination": destination,
+                "show_local": show_local,
+                "scenario": "weh_jam" if simulate_jam else None,
+            },
+            handle,
+        )
     os.replace(temporary, CONFIG_PATH)
     start()
 
@@ -350,8 +415,9 @@ def main() -> None:
     st.caption(
         "Basemap is Esri's light gray canvas: Mumbai's coast, creeks and parks, with streets kept faint and no API key. "
         "CARTO's no-label tiles now draw an \"API key required\" watermark, so they are not used. "
-        "Gray streets are outside the selected trip. Route streets carry the congestion colour. "
-        "The solid blue border is fastest; dashed borders are alternatives. "
+        "Gray streets are outside the selected trip. Along each route, colour changes segment by segment "
+        "with live speed versus normal speed. Light gray route pieces have no live sample yet. "
+        "Solid blue border is the best route; dashed borders are alternatives. "
         "Road geometry © OpenStreetMap contributors. Basemap © Esri."
     )
     components.html(_map_html(show_local, show_tomtom, origin, destination), height=680, scrolling=False)
